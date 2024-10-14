@@ -16,10 +16,10 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { RealtimeClient } from '@openai/realtime-api-beta';
 import { ItemType } from '@openai/realtime-api-beta/dist/lib/client.js';
 import { WavRecorder, WavStreamPlayer } from '../lib/wavtools/index.js';
-import { instructions } from '../utils/conversation_config.js';
+import { instructions, instructions_trans } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
 
-import { X, Edit, Zap, ArrowUp, ArrowDown } from 'react-feather';
+import { X, Edit, Zap, ArrowUp, ArrowDown, Speaker } from 'react-feather';
 import { Button } from '../components/button/Button';
 import { Toggle } from '../components/toggle/Toggle';
 import { Map } from '../components/Map';
@@ -125,6 +125,26 @@ export function ConsolePage() {
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
 
+
+  let usages = {
+    input_token_details: {
+      audio_tokens: 0,
+      text_tokens: 0,
+    },
+    output_token_details: {
+      audio_tokens: 0,
+      text_tokens: 0,
+    },
+  }
+  const cost = (usages: any) => {
+    return `$${(
+      usages.input_token_details.audio_tokens * 100 +
+      usages.input_token_details.text_tokens * 5 +
+      usages.output_token_details.audio_tokens * 200 +
+      usages.output_token_details.text_tokens * 20
+    ) / 1000000}`
+  }
+
   /**
    * Utility for formatting the timing of logs
    */
@@ -162,6 +182,40 @@ export function ConsolePage() {
    * Connect to conversation:
    * WavRecorder taks speech input, WavStreamPlayer output, client is API client
    */
+  const connectConversation_en = async () => {
+    connectConversation_trans('英語');
+  }
+  const connectConversation_zh = async () => {
+    connectConversation_trans('広東語');
+  }
+  const connectConversation_trans = useCallback(async (lang: string) => {
+    const client = clientRef.current;
+    const wavRecorder = wavRecorderRef.current;
+    const wavStreamPlayer = wavStreamPlayerRef.current;
+
+    // Set state variables
+    startTimeRef.current = new Date().toISOString();
+    setIsConnected(true);
+    setRealtimeEvents([]);
+    setItems(client.conversation.getItems());
+
+    await wavRecorder.begin();
+    await wavStreamPlayer.connect();
+
+    client.updateSession({ instructions: instructions_trans(lang) });
+    await client.connect();
+    client.sendUserMessageContent([
+      {
+        type: `input_text`,
+        text: `それではよろしくお願いいたします。`,
+      },
+    ]);
+
+    if (client.getTurnDetectionType() === 'server_vad') {
+      await wavRecorder.record((data) => client.appendInputAudio(data.mono));
+    }
+  }, []);
+
   const connectConversation = useCallback(async () => {
     const client = clientRef.current;
     const wavRecorder = wavRecorderRef.current;
@@ -173,19 +227,15 @@ export function ConsolePage() {
     setRealtimeEvents([]);
     setItems(client.conversation.getItems());
 
-    // Connect to microphone
     await wavRecorder.begin();
-
-    // Connect to audio output
     await wavStreamPlayer.connect();
 
-    // Connect to realtime API
+    client.updateSession({ instructions: instructions });
     await client.connect();
     client.sendUserMessageContent([
       {
         type: `input_text`,
-        text: `Hello!`,
-        // text: `For testing purposes, I want you to list ten car brands. Number each item, e.g. "one (or whatever number you are one): the item name".`
+        text: `それではよろしくお願いいたします。`,
       },
     ]);
 
@@ -377,9 +427,11 @@ export function ConsolePage() {
     const client = clientRef.current;
 
     // Set instructions
-    client.updateSession({ instructions: instructions });
+    //client.updateSession({ instructions: instructions });
     // Set transcription, otherwise we don't get user transcriptions back
     client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
+    client.updateSession({ voice: 'shimmer' }); // "alloy"|"shimmer"|"echo"
+    
 
     // Add tools
     client.addTool(
@@ -467,6 +519,14 @@ export function ConsolePage() {
           return realtimeEvents.concat(realtimeEvent);
         }
       });
+      if (realtimeEvent.source === 'server' && realtimeEvent.event.type === 'response.done') {
+        const { input_token_details, output_token_details } = realtimeEvent.event.response.usage;
+        usages.input_token_details.audio_tokens += input_token_details.audio_tokens;
+        usages.input_token_details.text_tokens += input_token_details.text_tokens;
+        usages.output_token_details.audio_tokens += output_token_details.audio_tokens;
+        usages.output_token_details.text_tokens += output_token_details.text_tokens;
+        console.log('response.done', Object.values(input_token_details), Object.values(output_token_details), cost(usages));
+      }
     });
     client.on('error', (event: any) => console.error(event));
     client.on('conversation.interrupted', async () => {
@@ -680,17 +740,45 @@ export function ConsolePage() {
               />
             )}
             <div className="spacer" />
-            <Button
-              label={isConnected ? 'disconnect' : 'connect'}
-              iconPosition={isConnected ? 'end' : 'start'}
-              icon={isConnected ? X : Zap}
-              buttonStyle={isConnected ? 'regular' : 'action'}
-              onClick={
-                isConnected ? disconnectConversation : connectConversation
-              }
-            />
+            {!isConnected && (
+              <Button
+                label={'雑談'}
+                iconPosition={'start'}
+                icon={Zap}
+                buttonStyle={'action'}
+                onClick={ connectConversation }
+              />
+            )}
+            {!isConnected && (
+              <Button
+                label={'日本語⇔英語'}
+                iconPosition={'start'}
+                icon={Zap}
+                buttonStyle={'action'}
+                onClick={ connectConversation_en }
+              />
+            )}
+            {!isConnected && (
+              <Button
+                label={'日本語⇔広東語'}
+                iconPosition={'start'}
+                icon={Zap}
+                buttonStyle={'action'}
+                onClick={ connectConversation_zh }
+              />
+            )}
+            {isConnected && (
+              <Button
+                label={'disconnect'}
+                iconPosition={'end'}
+                icon={X}
+                buttonStyle={'regular'}
+                onClick={ disconnectConversation }
+              />
+            )}
           </div>
         </div>
+        {/*
         <div className="content-right">
           <div className="content-block map">
             <div className="content-block-title">get_weather()</div>
@@ -725,6 +813,7 @@ export function ConsolePage() {
             </div>
           </div>
         </div>
+        */}
       </div>
     </div>
   );
